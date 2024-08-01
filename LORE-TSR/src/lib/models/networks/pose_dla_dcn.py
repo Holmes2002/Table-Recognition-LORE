@@ -12,11 +12,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
-
-from .DCNv2.dcn_v2 import DCN
-#from .dcn.modules.deform_conv import ModulatedDeformConvPack as DCN
+from DCNv2.dcn_v2 import DCN
 BN_MOMENTUM = 0.1
 logger = logging.getLogger(__name__)
+
 
 def get_model_url(data='imagenet', name='dla34', hash='ba72cf86'):
     return join('http://dl.yf.io/dla/models', data, '{}-{}.pth'.format(name, hash))
@@ -246,14 +245,6 @@ class DLA(nn.Module):
         self.level5 = Tree(levels[5], block, channels[4], channels[5], 2,
                            level_root=True, root_residual=residual_root)
 
-        # for m in self.modules():
-        #     if isinstance(m, nn.Conv2d):
-        #         n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-        #         m.weight.data.normal_(0, math.sqrt(2. / n))
-        #     elif isinstance(m, nn.BatchNorm2d):
-        #         m.weight.data.fill_(1)
-        #         m.bias.data.zero_()
-
     def _make_level(self, block, inplanes, planes, blocks, stride=1):
         downsample = None
         if stride != 1 or inplanes != planes:
@@ -481,15 +472,45 @@ class DLASeg(nn.Module):
         z = {}
         for head in self.heads:
             z[head] = self.__getattr__(head)(y[-1])
-        return [z]#, y[-1]
+        return z[head]#, y[-1]
     
 
-def get_pose_net(num_layers, heads, head_conv=256, down_ratio=4):
+def get_pose_net(num_layers = 34, heads = {'hm': 2, 'st': 8, 'wh': 8, 'ax': 256, 'cr': 256, 'reg': 2}
+                   , head_conv=256, down_ratio=4):
   model = DLASeg('dla{}'.format(num_layers), heads,
                  pretrained=True,
                  down_ratio=down_ratio,
                  final_kernel=1,
                  last_level=5,
                  head_conv=head_conv)
+  
   return model
+
+if __name__ == "__main__":
+    import onnx
+    import onnxruntime as ort
+    if True:
+        model = get_pose_net()
+        dummy_input = torch.randn(1, 3, 1024, 1024).cpu()
+
+        # Define the path to save the ONNX model
+        # print(model(dummy_input).shape)
+        # assert False
+        onnx_model_path = "model.onnx"
+        from DCNv2.dcn_v2 import DCN
+
+        torch.onnx.export(
+            model,
+            dummy_input,
+            onnx_model_path,
+            export_params=True,
+            opset_version= 11 ,
+            do_constant_folding=True,
+            input_names=['input'],  # the model's input names
+            output_names=['output'],  # the model's output names
+            dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}  # enable dynamic batching
+        )
+
+
+        print(f"Model has been converted to ONNX and saved at {onnx_model_path}")
 
